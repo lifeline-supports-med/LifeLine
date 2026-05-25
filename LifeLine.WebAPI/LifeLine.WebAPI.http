@@ -1,0 +1,6 @@
+@LifeLine.WebAPI_HostAddress = http://localhost:5063
+
+GET {{LifeLine.WebAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
