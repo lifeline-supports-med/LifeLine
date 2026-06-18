@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace LifeLine.Domain.Entities
 {
-    public class Donation
+    public class Donation : BaseEntity
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public decimal Amount { get; set; }
@@ -19,5 +19,6 @@ namespace LifeLine.Domain.Entities
         public Campaign Campaign { get; set; } = null!;
         public string? DonorId { get; set; }
         public ApplicationUser? Donor { get; set; }
+        public bool IsVerified { get; set; }
     }
 }

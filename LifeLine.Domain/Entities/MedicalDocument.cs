@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace LifeLine.Domain.Entities
 {
-    public class MedicalDocument
+    public class MedicalDocument : BaseEntity
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public string FileUrl { get; set; } = string.Empty;

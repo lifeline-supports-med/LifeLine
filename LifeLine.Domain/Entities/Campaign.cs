@@ -34,5 +34,6 @@ namespace LifeLine.Domain.Entities
         public ICollection<MedicalUpdate> Updates { get; set; } = [];
         public ICollection<Donation> Donations { get; set; } = [];
         public ICollection<SupportMessage> SupportMessages { get; set; } = [];
+        public string? CoverImagePublicId { get; set; }
     }
 }
