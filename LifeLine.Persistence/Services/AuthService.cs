@@ -284,7 +284,7 @@ public class AuthService : IAuthService
                 NormalizedEmail = email.ToUpper(),
                 UserName = email,
                 NormalizedUserName = email.ToUpper(),
-                Role = "Donor",
+                Role = "CampaignCreator",
                 IsActive = true,
                 EmailConfirmed = true
             };

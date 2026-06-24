@@ -54,6 +54,24 @@ public class DonationRepository : IDonationRepository
             .ToListAsync(ct);
     }
 
+    public async Task<int> CountAllByCampaignIdAsync(
+        Guid campaignId, CancellationToken ct = default)
+    {
+        return await _context.Donations
+            .Where(d => d.CampaignId == campaignId)
+            .CountAsync(ct);
+    }
+
+    public async Task DetachAsync(
+        Donation donation, CancellationToken ct = default)
+    {
+        var entry = _context.Entry(donation);
+        if (entry.State != EntityState.Detached)
+            entry.State = EntityState.Detached;
+
+        await Task.CompletedTask;
+    }
+
     public async Task UpdateAsync(
         Donation donation, CancellationToken ct = default)
     {
