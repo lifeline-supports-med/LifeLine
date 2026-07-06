@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Local secrets - never commit
+LifeLine.WebAPI/appsettings.json
+LifeLine.WebAPI/appsettings.Development.json
