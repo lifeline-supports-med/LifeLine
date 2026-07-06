@@ -13,7 +13,6 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<MedicalUpdate> MedicalUpdate { get; set; }
     public DbSet<Donation> Donations { get; set; }
     public DbSet<SupportMessage> SupportMessages { get; set; }
-    public DbSet<Payout> Payouts { get; set; }
     public DbSet<AuditLog> AuditLogs { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
