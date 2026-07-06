@@ -13,10 +13,17 @@ namespace LifeLine.WebAPI.Controllers;
 public class DonationController : ControllerBase
 {
     private readonly IDonationService _donationService;
+    private readonly IPaystackService _paystackService;
+    private readonly ILogger<DonationController> _logger;
 
-    public DonationController(IDonationService donationService)
+    public DonationController(
+        IDonationService donationService,
+        IPaystackService paystackService,
+        ILogger<DonationController> logger)
     {
         _donationService = donationService;
+        _paystackService = paystackService;
+        _logger = logger;
     }
 
     [HttpPost("initiate")]
@@ -52,72 +59,49 @@ public class DonationController : ControllerBase
 
     [HttpPost("webhook")]
     [AllowAnonymous]
-    public IActionResult Webhook(
-    [FromBody] dynamic payload,
-    [FromServices] IServiceScopeFactory scopeFactory)
+    [ProducesResponseType(200)]
+    [ProducesResponseType(401)]
+    public async Task<IActionResult> Webhook(
+        [FromServices] IServiceScopeFactory scopeFactory)
     {
+        Request.EnableBuffering();
+        using var reader = new StreamReader(Request.Body, leaveOpen: true);
+        var rawBody = await reader.ReadToEndAsync();
+        Request.Body.Position = 0;
 
+        var signature = Request.Headers["x-paystack-signature"].FirstOrDefault();
+        if (!_paystackService.VerifyWebhookSignature(rawBody, signature))
+        {
+            _logger.LogWarning("Rejected webhook with invalid or missing signature.");
+            return Unauthorized();
+        }
+
+        // Paystack expects a fast 200 response; verification work continues
+        // in the background on its own scope, since this request's scope
+        // will likely be disposed before the Task.Run body finishes.
         _ = Task.Run(async () =>
         {
             try
             {
+                var payload = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(rawBody);
                 string? eventType = payload?.@event?.ToString();
-
-                if (eventType != "charge.success")
-                    return;
+                if (eventType != "charge.success") return;
 
                 string? reference = payload?.data?.reference?.ToString();
-                if (string.IsNullOrEmpty(reference))
-                    return;
+                if (string.IsNullOrEmpty(reference)) return;
 
                 using var scope = scopeFactory.CreateScope();
-                var donationService = scope.ServiceProvider
-                    .GetRequiredService<IDonationService>();
-
-                await donationService.VerifyDonationAsync(
-                    reference, CancellationToken.None);
+                var donationService = scope.ServiceProvider.GetRequiredService<IDonationService>();
+                await donationService.VerifyDonationAsync(reference, CancellationToken.None);
             }
             catch (Exception ex)
             {
-                var logger = scopeFactory.CreateScope().ServiceProvider
-                    .GetRequiredService<ILogger<DonationController>>();
-                logger.LogError(
-                    "Webhook background processing failed: {Error}", ex.Message);
+                _logger.LogError("Webhook background processing failed: {Error}", ex.Message);
             }
         });
 
         return Ok();
     }
-
-    //[HttpPost("webhook")]
-    //[AllowAnonymous]
-    //[ProducesResponseType(200)]
-    //public async Task<IActionResult> Webhook(
-    //    [FromBody] dynamic payload,
-    //    [FromServices] IServiceScopeFactory scopeFactory,
-    //    CancellationToken ct = default)
-    //{
-    //    try
-    //    {
-    //        string? eventType = payload?.@event?.ToString();
-
-    //        if (eventType == "charge.success")
-    //        {
-    //            string? reference = payload?.data?.reference?.ToString();
-    //            if (!string.IsNullOrEmpty(reference))
-    //            {
-    //                await _donationService.VerifyDonationAsync(reference, ct);
-    //                return Ok();
-    //            }
-    //        }
-
-    //        return Ok();
-    //    }
-    //    catch
-    //    {
-    //        return Ok();
-    //    }
-    //}
 
     /// <summary>Get all verified donations for a campaign.</summary>
     [HttpGet("campaign/{campaignId:guid}")]

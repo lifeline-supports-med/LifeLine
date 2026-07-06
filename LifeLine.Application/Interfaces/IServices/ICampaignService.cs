@@ -15,6 +15,9 @@ namespace LifeLine.Application.Interfaces
         //Task<BaseResponse<CampaignResponseDto>> CreateCampaignAsync(
         //    string creatorId, CreateCampaignDto dto, CancellationToken ct = default);
 
+        Task<BaseResponse<string>> ActivatePaymentsAsync(
+            Guid campaignId, CancellationToken ct = default);
+
         Task<BaseResponse<CampaignResponseDto>> GetCampaignBySlugAsync(
             string slug, CancellationToken ct = default);
 

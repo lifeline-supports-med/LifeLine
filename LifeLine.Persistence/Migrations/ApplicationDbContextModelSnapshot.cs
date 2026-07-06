@@ -243,6 +243,9 @@ namespace LifeLine.Persistence.Migrations
                         .HasMaxLength(5000)
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("SubAccountCode")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime?>("SurgeryDate")
                         .HasColumnType("datetime2");
 

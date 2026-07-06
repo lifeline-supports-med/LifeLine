@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LifeLine.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260621055526_AddDonorSequenceRouting")]
-    partial class AddDonorSequenceRouting
+    [Migration("20260706085928_LifeLineDb")]
+    partial class LifeLineDb
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -244,6 +244,9 @@ namespace LifeLine.Persistence.Migrations
                     b.Property<string>("Story")
                         .IsRequired()
                         .HasMaxLength(5000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SubAccountCode")
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTime?>("SurgeryDate")

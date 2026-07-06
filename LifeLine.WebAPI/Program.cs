@@ -23,8 +23,10 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
@@ -204,7 +206,13 @@ builder.Services.AddRateLimiter(options =>
 // ─── Paystack ─────────────────────────────────────────
 builder.Services.Configure<PaystackSettings>(
     builder.Configuration.GetSection("Paystack"));
-builder.Services.AddHttpClient("Paystack");
+builder.Services.AddHttpClient("Paystack", (sp, client) =>
+{
+    var settings = sp.GetRequiredService<IOptions<PaystackSettings>>().Value;
+    client.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/");
+    client.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Bearer", settings.SecretKey);
+});
 
 // ─── Cloudinary ───────────────────────────────────────
 builder.Services.Configure<CloudinarySettings>(
@@ -217,17 +225,17 @@ builder.Services.Configure<EmailSettings>(
 builder.Services.AddScoped<IEmailService, EmailService>();
 
 // ─── Services ─────────────────────────────────────────
+// ─── Services ─────────────────────────────────────────
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<JwtTokenHelper>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddScoped<ICampaignService, CampaignService>();
+builder.Services.AddScoped<IPaystackService, PaystackService>();
 builder.Services.AddScoped<IDonationService, DonationService>();
-builder.Services.AddScoped<IPayoutService, PayoutService>();
 
 // ─── Repositories ─────────────────────────────────────
 builder.Services.AddScoped<ICampaignRepository, CampaignRepository>();
 builder.Services.AddScoped<IDonationRepository, DonationRepository>();
-builder.Services.AddScoped<IPayoutRepository, PayoutRepository>();
 
 // ─── Validators ───────────────────────────────────────
 builder.Services.AddTransient<IValidator<LoginDto>, LoginDtoValidator>();

@@ -18,6 +18,7 @@ public class CampaignService : ICampaignService
     private readonly ICampaignRepository _repo;
     private readonly ICloudinaryService _cloudinary;
     private readonly IEmailService _emailService;
+    private readonly IPaystackService _paystackService;
     private readonly IConfiguration _config;
     private readonly ILogger<CampaignService> _logger;
 
@@ -25,12 +26,14 @@ public class CampaignService : ICampaignService
         ICampaignRepository repo,
         ICloudinaryService cloudinary,
         IEmailService emailService,
+        IPaystackService paystackService,
         IConfiguration config,
         ILogger<CampaignService> logger)
     {
         _repo = repo;
         _cloudinary = cloudinary;
         _emailService = emailService;
+        _paystackService = paystackService;
         _config = config;
         _logger = logger;
     }
@@ -72,11 +75,9 @@ public class CampaignService : ICampaignService
                 "Campaign created: {CampaignId} by {CreatorId}",
                 campaign.Id, creatorId);
 
-            // ── Notify creator ──────────────────────────
             await _emailService.SendCampaignSubmittedToCreatorAsync(
                 creatorEmail, creatorName, campaign.Title);
 
-            // ── Notify admin ────────────────────────────
             var adminEmail = _config["AdminSettings:NotificationEmail"]!;
             await _emailService.SendNewCampaignAlertToAdminAsync(
                 adminEmail, creatorName, campaign.Title, campaign.Id);
@@ -101,6 +102,7 @@ public class CampaignService : ICampaignService
                 "An error occurred while creating the campaign.", statusCode: 500);
         }
     }
+
 
     public async Task<BaseResponse<CampaignResponseDto>> GetCampaignBySlugAsync(
         string slug, CancellationToken ct = default)
@@ -235,9 +237,6 @@ public class CampaignService : ICampaignService
         }
     }
 
-    // ──────────────────────────────────────────────────
-    // UPLOAD COVER IMAGE
-    // ──────────────────────────────────────────────────
     public async Task<BaseResponse<string>> UploadCoverImageAsync(
         Guid campaignId, string creatorId,
         IFormFile file, CancellationToken ct = default)
@@ -258,7 +257,6 @@ public class CampaignService : ICampaignService
                 return BaseResponse<string>.Failure(
                     upload.Error ?? "Image upload failed.", statusCode: 400);
 
-            // Delete old image from Cloudinary if exists
             if (!string.IsNullOrEmpty(campaign.CoverImagePublicId))
                 await _cloudinary.DeleteFileAsync(campaign.CoverImagePublicId);
 
@@ -292,9 +290,6 @@ public class CampaignService : ICampaignService
         }
     }
 
-    // ──────────────────────────────────────────────────
-    // UPLOAD MEDICAL DOCUMENT
-    // ──────────────────────────────────────────────────
     public async Task<BaseResponse<string>> UploadMedicalDocumentAsync(
         Guid campaignId, string creatorId,
         IFormFile file, string fileType, CancellationToken ct = default)
@@ -352,9 +347,6 @@ public class CampaignService : ICampaignService
         }
     }
 
-    // ──────────────────────────────────────────────────
-    // POST CAMPAIGN UPDATE
-    // ──────────────────────────────────────────────────
     public async Task<BaseResponse<string>> PostUpdateAsync(
         Guid campaignId, string creatorId,
         PostCampaignUpdateDto dto, CancellationToken ct = default)
@@ -407,9 +399,6 @@ public class CampaignService : ICampaignService
         }
     }
 
-    // ──────────────────────────────────────────────────
-    // GET CAMPAIGN UPDATES
-    // ──────────────────────────────────────────────────
     public async Task<BaseResponse<List<CampaignUpdateResponseDto>>> GetCampaignUpdatesAsync(
         Guid campaignId, CancellationToken ct = default)
     {
@@ -435,9 +424,6 @@ public class CampaignService : ICampaignService
         }
     }
 
-    // ──────────────────────────────────────────────────
-    // DELETE CAMPAIGN
-    // ──────────────────────────────────────────────────
     public async Task<BaseResponse<string>> DeleteCampaignAsync(
         Guid id, string requesterId,
         string requesterRole, CancellationToken ct = default)
@@ -456,7 +442,6 @@ public class CampaignService : ICampaignService
                 return BaseResponse<string>.Failure(
                     "You are not authorized to delete this campaign.", statusCode: 403);
 
-            // Delete cover image from Cloudinary
             if (!string.IsNullOrEmpty(campaign.CoverImagePublicId))
                 await _cloudinary.DeleteFileAsync(campaign.CoverImagePublicId);
 
@@ -508,4 +493,79 @@ public class CampaignService : ICampaignService
             CreatorId = campaign.CreatorId,
             CreatedAt = campaign.CreatedAt
         };
+
+    public async Task<BaseResponse<string>> ActivatePaymentsAsync(
+        Guid campaignId, CancellationToken ct = default)
+    {
+        try
+        {
+            var campaign = await _repo.GetByIdAsync(campaignId, ct);
+            if (campaign is null)
+                return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
+
+            if (!string.IsNullOrEmpty(campaign.SubAccountCode))
+                return BaseResponse<string>.Success(campaign.SubAccountCode, "Payments already active for this campaign.");
+
+            if (string.IsNullOrWhiteSpace(campaign.AccountNumber) || string.IsNullOrWhiteSpace(campaign.BankName))
+                return BaseResponse<string>.Failure(
+                    "This campaign has no bank account on file and cannot accept payments yet.", statusCode: 400);
+
+            var subAccountCode = await _paystackService.EnsureSubaccountAsync(
+                campaign.AccountName ?? campaign.PatientName,
+                campaign.AccountNumber,
+                ResolveBankCode(campaign.BankName),
+                idempotencyKey: $"SUB-CAMPAIGN-{campaign.CampaignId}",
+                ct: ct);
+
+            if (subAccountCode is null)
+            {
+                _logger.LogError(
+                    "Failed to create Paystack subaccount for campaign {CampaignId}.", campaignId);
+                return BaseResponse<string>.Failure(
+                    "Could not set up this campaign's payment account. Please try again.", statusCode: 502);
+            }
+
+            campaign.SubAccountCode = subAccountCode;
+            campaign.UpdatedAt = DateTime.UtcNow;
+
+            await _repo.UpdateAsync(campaign, ct);
+            await _repo.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "Payments activated for campaign {CampaignId}, subaccount {SubAccount}",
+                campaignId, subAccountCode);
+
+            return BaseResponse<string>.Success(subAccountCode, "Payments activated for this campaign.");
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("ActivatePaymentsAsync was cancelled.");
+            return BaseResponse<string>.Failure("Request was cancelled.", statusCode: 499);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Error activating payments for campaign {CampaignId}: {Error}", campaignId, ex.Message);
+            return BaseResponse<string>.Failure("An error occurred while activating payments.", statusCode: 500);
+        }
+    }
+
+    private static string ResolveBankCode(string bankName) => bankName.ToLower().Trim() switch
+    {
+        var b when b.Contains("opay") => "999992",
+        var b when b.Contains("palmpay") => "999991",
+        var b when b.Contains("kuda") => "50211",
+        var b when b.Contains("rubies") => "125",
+        var b when b.Contains("moniepoint") => "50515",
+        var b when b.Contains("gtbank") || b.Contains("guaranty") => "058",
+        var b when b.Contains("access") => "044",
+        var b when b.Contains("zenith") => "057",
+        var b when b.Contains("uba") => "033",
+        var b when b.Contains("first bank") || b.Contains("firstbank") => "011",
+        var b when b.Contains("union") => "032",
+        var b when b.Contains("sterling") => "232",
+        var b when b.Contains("wema") => "035",
+        var b when b.Contains("fcmb") => "214",
+        var b when b.Contains("stanbic") => "221",
+        _ => "999992"
+    };
 }

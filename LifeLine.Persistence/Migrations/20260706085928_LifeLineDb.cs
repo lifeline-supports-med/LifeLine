@@ -5,7 +5,7 @@
 namespace LifeLine.Persistence.Migrations
 {
     /// <inheritdoc />
-    public partial class AddDonorSequenceRouting : Migration
+    public partial class LifeLineDb : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -23,6 +23,12 @@ namespace LifeLine.Persistence.Migrations
                 type: "bit",
                 nullable: false,
                 defaultValue: false);
+
+            migrationBuilder.AddColumn<string>(
+                name: "SubAccountCode",
+                table: "Campaigns",
+                type: "nvarchar(max)",
+                nullable: true);
         }
 
         /// <inheritdoc />
@@ -35,6 +41,10 @@ namespace LifeLine.Persistence.Migrations
             migrationBuilder.DropColumn(
                 name: "WasRoutedToPlatform",
                 table: "Donations");
+
+            migrationBuilder.DropColumn(
+                name: "SubAccountCode",
+                table: "Campaigns");
         }
     }
 }

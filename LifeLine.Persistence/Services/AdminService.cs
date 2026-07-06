@@ -15,17 +15,23 @@ public class AdminService : IAdminService
 {
     private readonly ICampaignRepository _campaignRepo;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly ICampaignService _campaignService;
     private readonly IEmailService _emailService;
+    private readonly IPaystackService _paystackService;
     private readonly ILogger<AdminService> _logger;
 
     public AdminService(
         ICampaignRepository campaignRepo,
         UserManager<ApplicationUser> userManager,
+        ICampaignService campaignService,
         IEmailService emailService,
+        IPaystackService paystackService,
         ILogger<AdminService> logger)
     {
         _campaignRepo = campaignRepo;
         _userManager = userManager;
+        _campaignService = campaignService;
+        _paystackService = paystackService;
         _emailService = emailService;
         _logger = logger;
     }
@@ -85,6 +91,66 @@ public class AdminService : IAdminService
         }
     }
 
+    //public async Task<BaseResponse<string>> VerifyCampaignAsync(
+    //    Guid campaignId, string adminId, CancellationToken ct = default)
+    //{
+    //    try
+    //    {
+    //        var campaign = await _campaignRepo.GetByIdAsync(campaignId, ct);
+    //        if (campaign is null)
+    //            return BaseResponse<string>.Failure(
+    //                "Campaign not found.", statusCode: 404);
+
+    //        if (campaign.IsVerified)
+    //            return BaseResponse<string>.Failure(
+    //                "This campaign is already verified.", statusCode: 400);
+
+    //        if (campaign.Status == CampaignStatus.Rejected)
+    //            return BaseResponse<string>.Failure(
+    //                "A rejected campaign cannot be verified directly. Ask the creator to resubmit.",
+    //                statusCode: 400);
+
+    //        campaign.IsVerified = true;
+    //        campaign.Status = CampaignStatus.Verified;
+    //        campaign.VerifiedAt = DateTime.UtcNow;
+    //        campaign.UpdatedAt = DateTime.UtcNow;
+    //        campaign.RejectionReason = null;
+
+    //        await _campaignRepo.UpdateAsync(campaign, ct);
+    //        await _campaignRepo.SaveChangesAsync(ct);
+
+    //        if (campaign.Creator is not null)
+    //        {
+    //            await _emailService.SendCampaignApprovedEmailAsync(
+    //                campaign.Creator.Email!,
+    //                $"{campaign.Creator.FirstName} {campaign.Creator.LastName}".Trim(),
+    //                campaign.Title,
+    //                campaign.Slug);
+    //        }
+
+    //        _logger.LogInformation(
+    //            "Campaign {CampaignId} verified by admin {AdminId}",
+    //            campaignId, adminId);
+
+    //        return BaseResponse<string>.Success(
+    //            null!, "Campaign verified and is now live.");
+    //    }
+    //    catch (OperationCanceledException)
+    //    {
+    //        _logger.LogWarning("VerifyCampaignAsync was cancelled.");
+    //        return BaseResponse<string>.Failure(
+    //            "Request was cancelled.", statusCode: 499);
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        _logger.LogError(
+    //            "Error verifying campaign {CampaignId}: {Error}",
+    //            campaignId, ex.Message);
+    //        return BaseResponse<string>.Failure(
+    //            "An error occurred.", statusCode: 500);
+    //    }
+    //}
+
     public async Task<BaseResponse<string>> VerifyCampaignAsync(
         Guid campaignId, string adminId, CancellationToken ct = default)
     {
@@ -92,8 +158,7 @@ public class AdminService : IAdminService
         {
             var campaign = await _campaignRepo.GetByIdAsync(campaignId, ct);
             if (campaign is null)
-                return BaseResponse<string>.Failure(
-                    "Campaign not found.", statusCode: 404);
+                return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
 
             if (campaign.IsVerified)
                 return BaseResponse<string>.Failure(
@@ -103,6 +168,12 @@ public class AdminService : IAdminService
                 return BaseResponse<string>.Failure(
                     "A rejected campaign cannot be verified directly. Ask the creator to resubmit.",
                     statusCode: 400);
+
+            var activationResult = await _campaignService.ActivatePaymentsAsync(campaignId, ct);
+            if (!activationResult.IsSuccess)
+                return BaseResponse<string>.Failure(
+                    activationResult.Message ?? "Could not activate payments for this campaign.",
+                    statusCode: activationResult.StatusCode ?? 502);
 
             campaign.IsVerified = true;
             campaign.Status = CampaignStatus.Verified;
@@ -132,16 +203,14 @@ public class AdminService : IAdminService
         catch (OperationCanceledException)
         {
             _logger.LogWarning("VerifyCampaignAsync was cancelled.");
-            return BaseResponse<string>.Failure(
-                "Request was cancelled.", statusCode: 499);
+            return BaseResponse<string>.Failure("Request was cancelled.", statusCode: 499);
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 "Error verifying campaign {CampaignId}: {Error}",
                 campaignId, ex.Message);
-            return BaseResponse<string>.Failure(
-                "An error occurred.", statusCode: 500);
+            return BaseResponse<string>.Failure("An error occurred.", statusCode: 500);
         }
     }
 

@@ -27,6 +27,7 @@ namespace LifeLine.Domain.Entities
         public string? BankName { get; set; }
         public string? AccountNumber { get; set; }
         public string? AccountName { get; set; }
+        public string? SubAccountCode { get; set; }
         public string CreatorId { get; set; } = string.Empty;
         public ApplicationUser Creator { get; set; } = null!;
 
