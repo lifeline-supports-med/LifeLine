@@ -101,25 +101,6 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
                   .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ─── Payout ───────────────────────────────────────────────────────────
-        modelBuilder.Entity<Payout>(entity =>
-        {
-            entity.HasKey(p => p.Id);
-            entity.Property(p => p.Amount).HasColumnType("decimal(18,2)");
-            entity.Property(p => p.BankName).IsRequired().HasMaxLength(100);
-            entity.Property(p => p.AccountNumber).IsRequired().HasMaxLength(10);
-            entity.Property(p => p.AccountName).IsRequired().HasMaxLength(100);
-            entity.Property(p => p.Status).HasMaxLength(20);
-            entity.Property(p => p.Notes).HasMaxLength(500);
-            entity.Property(p => p.RejectionReason).HasMaxLength(500);
-            entity.Property(p => p.RequestedById).IsRequired().HasMaxLength(450);
-            entity.Property(p => p.ApprovedByAdminId).HasMaxLength(450);
-            entity.HasOne(p => p.Campaign)
-                  .WithMany()
-                  .HasForeignKey(p => p.CampaignId)
-                  .OnDelete(DeleteBehavior.Restrict);
-        });
-
         // ─── AuditLog ─────────────────────────────────────────────────────────
         modelBuilder.Entity<AuditLog>(entity =>
         {
