@@ -175,6 +175,47 @@ public class PaystackService : IPaystackService
         }
     }
 
+    public async Task<BaseResponse<List<PaystackBankDto>>> GetBanksAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var httpRequest = new HttpRequestMessage(HttpMethod.Get, "bank?country=nigeria&currency=NGN");
+            var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
+            var body = await httpResponse.Content.ReadAsStringAsync(ct);
+            var parsed = JObject.Parse(body);
+
+            var status = parsed.Value<bool?>("status") ?? false;
+            if (!status || parsed["data"] is not JArray items)
+            {
+                _logger.LogError("Failed to fetch banks from Paystack. Body: {Body}", body);
+                return BaseResponse<List<PaystackBankDto>>.Failure(
+                    "Could not retrieve bank list from payment provider.", statusCode: 502);
+            }
+
+            var banks = items
+                .Select(b => new PaystackBankDto
+                {
+                    Name = b.Value<string>("name") ?? string.Empty,
+                    Code = b.Value<string>("code") ?? string.Empty
+                })
+                .Where(b => !string.IsNullOrEmpty(b.Name) && !string.IsNullOrEmpty(b.Code))
+                .OrderBy(b => b.Name)
+                .ToList();
+
+            return BaseResponse<List<PaystackBankDto>>.Success(banks, $"Retrieved {banks.Count} banks.");
+        }
+        catch (OperationCanceledException)
+        {
+            return BaseResponse<List<PaystackBankDto>>.Failure("Request was cancelled.", statusCode: 499);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Error fetching bank list: {Error}", ex.Message);
+            return BaseResponse<List<PaystackBankDto>>.Failure(
+                "An error occurred while retrieving banks.", statusCode: 500);
+        }
+    }
+
     public async Task<string?> EnsureSubaccountAsync(
         string businessName,
         string accountNumber,

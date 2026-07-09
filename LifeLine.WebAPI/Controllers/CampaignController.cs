@@ -1,7 +1,9 @@
-﻿using LifeLine.Application.Common.Response;
+﻿using LifeLine.Application.Common.RequestModel.PaystackDTO;
+using LifeLine.Application.Common.Response;
 using LifeLine.Application.Common.Response.Campaign;
 using LifeLine.Application.DTO.Campaign;
 using LifeLine.Application.Interfaces;
+using LifeLine.Application.Interfaces.IServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -14,10 +16,12 @@ namespace LifeLine.WebAPI.Controllers
     public class CampaignController : ControllerBase
     {
         private readonly ICampaignService _campaignService;
+        private readonly IPaystackService _paystackService;
 
-        public CampaignController(ICampaignService campaignService)
+        public CampaignController(ICampaignService campaignService, IPaystackService paystackService)
         {
             _campaignService = campaignService;
+            _paystackService = paystackService;
         }
 
         [HttpPost]
@@ -46,6 +50,15 @@ namespace LifeLine.WebAPI.Controllers
             CancellationToken ct = default)
         {
             var response = await _campaignService.GetAllCampaignsAsync(page, pageSize, ct);
+            return StatusCode(response.StatusCode ?? 200, response);
+        }
+
+        [HttpGet("banks")]
+        [AllowAnonymous]
+        [ProducesResponseType(typeof(BaseResponse<List<PaystackBankDto>>), 200)]
+        public async Task<IActionResult> GetBanks(CancellationToken ct = default)
+        {
+            var response = await _paystackService.GetBanksAsync(ct);
             return StatusCode(response.StatusCode ?? 200, response);
         }
 

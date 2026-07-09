@@ -14,6 +14,8 @@ namespace LifeLine.Application.Interfaces.IServices
             string reference,
             CancellationToken ct = default);
 
+        Task<BaseResponse<List<PaystackBankDto>>> GetBanksAsync(CancellationToken ct = default);
+
         Task<string?> EnsureSubaccountAsync(
             string businessName,
             string accountNumber,
@@ -21,11 +23,6 @@ namespace LifeLine.Application.Interfaces.IServices
             string idempotencyKey,
             CancellationToken ct = default);
 
-        /// <summary>
-        /// Verifies the x-paystack-signature header against the raw request
-        /// body using HMAC-SHA512 with the Paystack secret key. Must be called
-        /// with the untouched raw body — not a re-serialized/deserialized copy.
-        /// </summary>
         bool VerifyWebhookSignature(string rawBody, string? signatureHeader);
     }
 }

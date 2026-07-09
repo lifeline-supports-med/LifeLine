@@ -26,6 +26,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Serilog;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
@@ -78,14 +79,12 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// ─── Controllers (ONCE only) ──────────────────────────
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add(new ProducesAttribute("application/json"));
 });
 builder.Services.AddSignalR();
 
-// ─── File Upload Limits ───────────────────────────────
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = 20 * 1024 * 1024;
@@ -96,7 +95,6 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 20 * 1024 * 1024;
 });
 
-// ─── Database ─────────────────────────────────────────
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -224,8 +222,6 @@ builder.Services.Configure<EmailSettings>(
     builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<IEmailService, EmailService>();
 
-// ─── Services ─────────────────────────────────────────
-// ─── Services ─────────────────────────────────────────
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<JwtTokenHelper>();
 builder.Services.AddScoped<IAdminService, AdminService>();
@@ -233,11 +229,9 @@ builder.Services.AddScoped<ICampaignService, CampaignService>();
 builder.Services.AddScoped<IPaystackService, PaystackService>();
 builder.Services.AddScoped<IDonationService, DonationService>();
 
-// ─── Repositories ─────────────────────────────────────
 builder.Services.AddScoped<ICampaignRepository, CampaignRepository>();
 builder.Services.AddScoped<IDonationRepository, DonationRepository>();
 
-// ─── Validators ───────────────────────────────────────
 builder.Services.AddTransient<IValidator<LoginDto>, LoginDtoValidator>();
 builder.Services.AddTransient<IValidator<RegisterDto>, RegisterDtoValidator>();
 builder.Services.AddTransient<IValidator<ForgotPasswordDto>, ForgotPasswordDtoValidator>();
@@ -252,6 +246,15 @@ builder.Services.AddTransient<IValidator<InitiateDonationDto>, InitiateDonationD
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.AddDebug();
+
+builder.Host.UseSerilog((context, services, configuration) =>
+{
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .WriteTo.File(
+            Path.Combine(Directory.GetCurrentDirectory(), "Logs", "log-.txt"),
+            rollingInterval: RollingInterval.Day);
+});
 
 var app = builder.Build();
 
