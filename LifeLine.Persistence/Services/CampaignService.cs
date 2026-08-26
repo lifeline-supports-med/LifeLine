@@ -1,4 +1,4 @@
-﻿using LifeLine.Application.Common.Response;
+using LifeLine.Application.Common.Response;
 using LifeLine.Application.Common.Response.Campaign;
 using LifeLine.Application.DTO.Campaign;
 using LifeLine.Application.Helpers;
@@ -58,6 +58,7 @@ public class CampaignService : ICampaignService
                 GoalAmount = dto.GoalAmount,
                 SurgeryDate = dto.SurgeryDate,
                 BankName = dto.BankName.Trim(),
+                BankCode = dto.BankCode.Trim(),
                 AccountNumber = dto.AccountNumber.Trim(),
                 AccountName = dto.AccountName.Trim(),
                 Slug = slug,
@@ -165,6 +166,172 @@ public class CampaignService : ICampaignService
                 "Request was cancelled.", statusCode: 499);
         }
     }
+
+
+    public async Task<BaseResponse<string>> ActivatePaymentsAsync(Guid campaignId, CancellationToken ct = default)
+    {
+        try
+        {
+            var campaign = await _repo.GetByIdAsync(campaignId, ct);
+            if (campaign is null)
+                return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
+
+            if (string.IsNullOrWhiteSpace(campaign.AccountNumber))
+                return BaseResponse<string>.Failure("Campaign is missing bank account number.", statusCode: 400);
+
+            // 1. Sanitize Account Number (remove spaces/dashes, strip leading 0 if 11-digit phone number)
+            var accountNumber = campaign.AccountNumber.Trim().Replace(" ", "").Replace("-", "");
+            if (accountNumber.Length == 11 && accountNumber.StartsWith("0"))
+                accountNumber = accountNumber[1..];
+
+            // 2. Resolve Bank Code if empty or invalid
+            var bankCode = campaign.BankCode?.Trim();
+            if (string.IsNullOrWhiteSpace(bankCode) || !bankCode.All(char.IsDigit))
+            {
+                bankCode = ResolveBankCode(campaign.BankName ?? "");
+            }
+
+            if (string.IsNullOrWhiteSpace(bankCode))
+                return BaseResponse<string>.Failure("Could not determine a valid bank code for this campaign.", statusCode: 400);
+
+            campaign.AccountNumber = accountNumber;
+            campaign.BankCode = bankCode;
+
+            // 3. Resolve Account Name via NIBSS (Paystack)
+            _logger.LogInformation("Resolving bank details for campaign {Id}: Account={Account}, BankCode={BankCode}", 
+                campaignId, accountNumber, bankCode);
+
+            var resolveRes = await _paystackService.ResolveAccountNumberAsync(accountNumber, bankCode, ct);
+            if (!resolveRes.IsSuccess || resolveRes.Data is null)
+            {
+                campaign.Status = CampaignStatus.PaymentSetupFailed;
+                campaign.PaymentSetupErrorMessage = resolveRes.Message ?? "Invalid account number or bank code.";
+                await _repo.UpdateAsync(campaign, ct);
+                await _repo.SaveChangesAsync(ct);
+                return BaseResponse<string>.Failure(campaign.PaymentSetupErrorMessage, statusCode: 400);
+            }
+
+            // Save the official NIBSS-verified account name
+            campaign.AccountName = resolveRes.Data.AccountName;
+            campaign.IsAccountNameResolved = true;
+
+            // 4. Ensure / Create Paystack Subaccount
+            var subAccountCode = await _paystackService.EnsureSubaccountAsync(
+                $"Lifeline - {campaign.PatientName}",
+                accountNumber,
+                bankCode,
+                idempotencyKey: $"SUB-{campaign.CampaignId}",
+                ct: ct);
+
+            if (string.IsNullOrWhiteSpace(subAccountCode))
+            {
+                campaign.Status = CampaignStatus.PaymentSetupFailed;
+                campaign.PaymentSetupErrorMessage = "Failed to create payment subaccount with Paystack.";
+                await _repo.UpdateAsync(campaign, ct);
+                await _repo.SaveChangesAsync(ct);
+                return BaseResponse<string>.Failure(campaign.PaymentSetupErrorMessage, statusCode: 502);
+            }
+
+            campaign.SubAccountCode = subAccountCode;
+
+            // 5. Inspect Paystack Subaccount Verification & Settlement Status
+            var subaccountDetails = await _paystackService.GetSubaccountAsync(subAccountCode, ct);
+            var isVerified = subaccountDetails.IsSuccess && (subaccountDetails.Data?.IsVerified ?? false);
+            var isActive = subaccountDetails.IsSuccess && (subaccountDetails.Data?.Active ?? false);
+
+            campaign.PaystackSubaccountIsVerified = isVerified;
+            campaign.PaystackSubaccountIsActive = isActive;
+
+            // 6. Evaluate Settlement Readiness (An active subaccount with resolved NIBSS bank account is ready to receive split payments)
+            if (!string.IsNullOrWhiteSpace(subAccountCode) && (isActive || !subaccountDetails.IsSuccess))
+            {
+                campaign.IsPaymentReady = true;
+                campaign.Status = CampaignStatus.Verified;
+                campaign.PaymentSetupErrorMessage = null;
+                campaign.PaymentActivatedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                campaign.IsPaymentReady = false;
+                campaign.Status = CampaignStatus.PaymentSetupPending;
+                campaign.PaymentSetupErrorMessage = "Subaccount created but is currently inactive on Paystack.";
+            }
+
+            campaign.UpdatedAt = DateTime.UtcNow;
+            await _repo.UpdateAsync(campaign, ct);
+            await _repo.SaveChangesAsync(ct);
+
+            _logger.LogInformation("Payments activated for campaign {CampaignId}: Subaccount={SubAccount}, Ready={IsReady}",
+                campaignId, subAccountCode, campaign.IsPaymentReady);
+
+            return BaseResponse<string>.Success(campaign.SubAccountCode, "Payment activation processed.");
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("ActivatePaymentsAsync was cancelled for campaign {CampaignId}.", campaignId);
+            return BaseResponse<string>.Failure("Request was cancelled.", statusCode: 499);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error activating payments for campaign {CampaignId}: {Error}", campaignId, ex.Message);
+            return BaseResponse<string>.Failure("An error occurred while activating payments.", statusCode: 500);
+        }
+    }
+
+    //public async Task<BaseResponse<string>> ActivatePaymentsAsync(
+    //Guid campaignId, CancellationToken ct = default)
+    //{
+    //    try
+    //    {
+    //        var campaign = await _repo.GetByIdAsync(campaignId, ct);
+    //        if (campaign is null)
+    //            return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
+
+    //        if (!string.IsNullOrEmpty(campaign.SubAccountCode))
+    //            return BaseResponse<string>.Success(campaign.SubAccountCode, "Payments already active for this campaign.");
+
+    //        if (string.IsNullOrWhiteSpace(campaign.AccountNumber) || string.IsNullOrWhiteSpace(campaign.BankCode))
+    //            return BaseResponse<string>.Failure(
+    //                "This campaign has no bank account on file and cannot accept payments yet.", statusCode: 400);
+
+    //        var subAccountCode = await _paystackService.EnsureSubaccountAsync(
+    //            campaign.AccountName ?? campaign.PatientName,
+    //            campaign.AccountNumber,
+    //            campaign.BankCode,
+    //            idempotencyKey: $"SUB-CAMPAIGN-{campaign.CampaignId}",
+    //            ct: ct);
+
+    //        if (subAccountCode is null)
+    //        {
+    //            _logger.LogError(
+    //                "Failed to create Paystack subaccount for campaign {CampaignId}.", campaignId);
+    //            return BaseResponse<string>.Failure(
+    //                "Could not set up this campaign's payment account. Please try again.", statusCode: 502);
+    //        }
+
+    //        campaign.SubAccountCode = subAccountCode;
+    //        campaign.UpdatedAt = DateTime.UtcNow;
+
+    //        await _repo.UpdateAsync(campaign, ct);
+    //        await _repo.SaveChangesAsync(ct);
+
+    //        _logger.LogInformation(
+    //            "Payments activated for campaign {CampaignId}, subaccount {SubAccount}",
+    //            campaignId, subAccountCode);
+
+    //        return BaseResponse<string>.Success(subAccountCode, "Payments activated for this campaign.");
+    //    }
+    //    catch (OperationCanceledException)
+    //    {
+    //        _logger.LogWarning("ActivatePaymentsAsync was cancelled.");
+    //        return BaseResponse<string>.Failure("Request was cancelled.", statusCode: 499);
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        _logger.LogError("Error activating payments for campaign {CampaignId}: {Error}", campaignId, ex.Message);
+    //        return BaseResponse<string>.Failure("An error occurred while activating payments.", statusCode: 500);
+    //    }
+    //}
 
     public async Task<BaseResponse<List<CampaignResponseDto>>> GetMyCampaignsAsync(
         string creatorId, CancellationToken ct = default)
@@ -494,60 +661,60 @@ public class CampaignService : ICampaignService
             CreatedAt = campaign.CreatedAt
         };
 
-    public async Task<BaseResponse<string>> ActivatePaymentsAsync(
-        Guid campaignId, CancellationToken ct = default)
-    {
-        try
-        {
-            var campaign = await _repo.GetByIdAsync(campaignId, ct);
-            if (campaign is null)
-                return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
+    //public async Task<BaseResponse<string>> ActivatePaymentsAsync(
+    //    Guid campaignId, CancellationToken ct = default)
+    //{
+    //    try
+    //    {
+    //        var campaign = await _repo.GetByIdAsync(campaignId, ct);
+    //        if (campaign is null)
+    //            return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
 
-            if (!string.IsNullOrEmpty(campaign.SubAccountCode))
-                return BaseResponse<string>.Success(campaign.SubAccountCode, "Payments already active for this campaign.");
+    //        if (!string.IsNullOrEmpty(campaign.SubAccountCode))
+    //            return BaseResponse<string>.Success(campaign.SubAccountCode, "Payments already active for this campaign.");
 
-            if (string.IsNullOrWhiteSpace(campaign.AccountNumber) || string.IsNullOrWhiteSpace(campaign.BankName))
-                return BaseResponse<string>.Failure(
-                    "This campaign has no bank account on file and cannot accept payments yet.", statusCode: 400);
+    //        if (string.IsNullOrWhiteSpace(campaign.AccountNumber) || string.IsNullOrWhiteSpace(campaign.BankName))
+    //            return BaseResponse<string>.Failure(
+    //                "This campaign has no bank account on file and cannot accept payments yet.", statusCode: 400);
 
-            var subAccountCode = await _paystackService.EnsureSubaccountAsync(
-                campaign.AccountName ?? campaign.PatientName,
-                campaign.AccountNumber,
-                ResolveBankCode(campaign.BankName),
-                idempotencyKey: $"SUB-CAMPAIGN-{campaign.CampaignId}",
-                ct: ct);
+    //        var subAccountCode = await _paystackService.EnsureSubaccountAsync(
+    //            campaign.AccountName ?? campaign.PatientName,
+    //            campaign.AccountNumber,
+    //            ResolveBankCode(campaign.BankName),
+    //            idempotencyKey: $"SUB-CAMPAIGN-{campaign.CampaignId}",
+    //            ct: ct);
 
-            if (subAccountCode is null)
-            {
-                _logger.LogError(
-                    "Failed to create Paystack subaccount for campaign {CampaignId}.", campaignId);
-                return BaseResponse<string>.Failure(
-                    "Could not set up this campaign's payment account. Please try again.", statusCode: 502);
-            }
+    //        if (subAccountCode is null)
+    //        {
+    //            _logger.LogError(
+    //                "Failed to create Paystack subaccount for campaign {CampaignId}.", campaignId);
+    //            return BaseResponse<string>.Failure(
+    //                "Could not set up this campaign's payment account. Please try again.", statusCode: 502);
+    //        }
 
-            campaign.SubAccountCode = subAccountCode;
-            campaign.UpdatedAt = DateTime.UtcNow;
+    //        campaign.SubAccountCode = subAccountCode;
+    //        campaign.UpdatedAt = DateTime.UtcNow;
 
-            await _repo.UpdateAsync(campaign, ct);
-            await _repo.SaveChangesAsync(ct);
+    //        await _repo.UpdateAsync(campaign, ct);
+    //        await _repo.SaveChangesAsync(ct);
 
-            _logger.LogInformation(
-                "Payments activated for campaign {CampaignId}, subaccount {SubAccount}",
-                campaignId, subAccountCode);
+    //        _logger.LogInformation(
+    //            "Payments activated for campaign {CampaignId}, subaccount {SubAccount}",
+    //            campaignId, subAccountCode);
 
-            return BaseResponse<string>.Success(subAccountCode, "Payments activated for this campaign.");
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogWarning("ActivatePaymentsAsync was cancelled.");
-            return BaseResponse<string>.Failure("Request was cancelled.", statusCode: 499);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError("Error activating payments for campaign {CampaignId}: {Error}", campaignId, ex.Message);
-            return BaseResponse<string>.Failure("An error occurred while activating payments.", statusCode: 500);
-        }
-    }
+    //        return BaseResponse<string>.Success(subAccountCode, "Payments activated for this campaign.");
+    //    }
+    //    catch (OperationCanceledException)
+    //    {
+    //        _logger.LogWarning("ActivatePaymentsAsync was cancelled.");
+    //        return BaseResponse<string>.Failure("Request was cancelled.", statusCode: 499);
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        _logger.LogError("Error activating payments for campaign {CampaignId}: {Error}", campaignId, ex.Message);
+    //        return BaseResponse<string>.Failure("An error occurred while activating payments.", statusCode: 500);
+    //    }
+    //}
 
     private static string ResolveBankCode(string bankName) => bankName.ToLower().Trim() switch
     {

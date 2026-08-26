@@ -3,6 +3,7 @@ using LifeLine.Application.Interfaces.IServices;
 using LifeLine.Domain.Settings.MailKit;
 using MailKit.Net.Smtp;
 using MailKit.Security;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MimeKit;
@@ -14,19 +15,25 @@ namespace LifeLine.Persistence.Services
     {
         private readonly EmailSettings _settings;
         private readonly ILogger<EmailService> _logger;
+        private readonly string _frontendBaseUrl;
 
         public EmailService(
             IOptions<EmailSettings> settings,
+            IConfiguration config,
             ILogger<EmailService> logger)
         {
             _settings = settings.Value;
             _logger = logger;
+            _frontendBaseUrl = config["AppSettings:FrontendBaseUrl"] ?? "http://localhost:3000; http://localhost:4000";
         }
 
         public async Task SendPasswordResetEmailAsync(
             string toEmail, string toName, string resetToken)
         {
             var subject = "Reset Your Lifeline Password";
+
+            var resetLink =
+                $"{_frontendBaseUrl}/reset-password?email={Uri.EscapeDataString(toEmail)}&token={Uri.EscapeDataString(resetToken)}";
 
             var body = $"""
             <html>
@@ -39,17 +46,28 @@ namespace LifeLine.Persistence.Services
                 <p>Hi <strong>{toName}</strong>,</p>
                 
                 <p>We received a request to reset your Lifeline password. 
-                   Use the token below to complete the reset:</p>
+                   Click the button below to choose a new one:</p>
                 
+                <p style="margin:24px 0;">
+                  <a href="{resetLink}" 
+                     style="background:#0B6B4B; color:#fff; padding:12px 24px; 
+                            border-radius:6px; text-decoration:none; 
+                            display:inline-block; font-weight:bold;">
+                    Reset My Password
+                  </a>
+                </p>
+                
+                <p style="color:#666; font-size:13px;">
+                  If the button doesn't work, copy this code into the reset page manually:
+                </p>
                 <div style="background:#f0f9f5; border:1px solid #0B6B4B; 
                             border-radius:6px; padding:16px; 
-                            font-size:14px; word-break:break-all; margin:24px 0;">
-                  <strong>Reset Token:</strong><br/>
+                            font-size:14px; word-break:break-all; margin:12px 0;">
                   <code style="color:#0B6B4B;">{resetToken}</code>
                 </div>
                 
                 <p style="color:#666; font-size:13px;">
-                  This token expires in <strong>1 hour</strong>. 
+                  This link expires in <strong>1 hour</strong>. 
                   If you did not request a password reset, 
                   please ignore this email.
                 </p>

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using LifeLine.Application.Common.RequestModel.PaystackDTO;
 using LifeLine.Application.Common.Response;
+using LifeLine.Application.DTO.Paystack;
 using LifeLine.Application.Interfaces.IServices;
 using LifeLine.Domain.Settings.Paystack;
 using Microsoft.Extensions.Logging;
@@ -27,10 +28,6 @@ public class PaystackService : IPaystackService
         _logger = logger;
 
         _httpClient = httpClientFactory.CreateClient("Paystack");
-        //var baseUrl = _settings.BaseUrl.TrimEnd('/') + "/";
-        //_httpClient.BaseAddress = new Uri(baseUrl);
-        //_httpClient.DefaultRequestHeaders.Authorization =
-        //    new AuthenticationHeaderValue("Bearer", _settings.SecretKey);
     }
 
     public async Task<BaseResponse<PaystackInitializeResultDto>> InitializeTransactionAsync(
@@ -225,6 +222,16 @@ public class PaystackService : IPaystackService
     {
         try
         {
+            // Resolve the bank name for this bankCode, so a "matching"
+            // existing subaccount can be verified as the SAME bank, not
+            // just a coincidentally identical account number at a
+            // different bank (Nigerian account numbers are only unique
+            // within a single bank, not across banks).
+            var banksResult = await GetBanksAsync(ct);
+            var expectedBankName = banksResult.IsSuccess
+                ? banksResult.Data?.FirstOrDefault(b => b.Code == bankCode)?.Name
+                : null;
+
             var listRequest = new HttpRequestMessage(HttpMethod.Get, "subaccount?perPage=100");
             var listResponse = await _httpClient.SendAsync(listRequest, ct);
             var listBody = await listResponse.Content.ReadAsStringAsync(ct);
@@ -235,10 +242,16 @@ public class PaystackService : IPaystackService
                 foreach (var item in items)
                 {
                     var itemAccount = item.Value<string>("account_number");
-                    if (itemAccount == accountNumber)
+                    var itemBankName = item.Value<string>("settlement_bank");
+
+                    var accountMatches = itemAccount == accountNumber;
+                    var bankMatches = expectedBankName is not null
+                        && string.Equals(itemBankName, expectedBankName, StringComparison.OrdinalIgnoreCase);
+
+                    if (accountMatches && bankMatches)
                     {
                         var existingCode = item.Value<string>("subaccount_code");
-                        _logger.LogInformation("Subaccount already exists for {Account}: {Code}", accountNumber, existingCode);
+                        _logger.LogInformation("Subaccount already exists for {Account} at {Bank}: {Code}", accountNumber, itemBankName, existingCode);
                         return existingCode;
                     }
                 }
@@ -249,7 +262,7 @@ public class PaystackService : IPaystackService
                 business_name = businessName,
                 settlement_bank = bankCode,
                 account_number = accountNumber,
-                percentage_charge = 0
+                percentage_charge = 10
             };
 
             var createJson = JsonConvert.SerializeObject(createPayload);
@@ -266,7 +279,7 @@ public class PaystackService : IPaystackService
             if (createParsed.Value<bool?>("status") ?? false)
             {
                 var code = createParsed["data"]?.Value<string>("subaccount_code");
-                _logger.LogInformation("Created Paystack subaccount for {Name} ({Account}): {Code}", businessName, accountNumber, code);
+                _logger.LogInformation("Created Paystack subaccount for {Name} ({Account}, {Bank}): {Code}", businessName, accountNumber, bankCode, code);
                 return code;
             }
 
@@ -283,6 +296,69 @@ public class PaystackService : IPaystackService
         {
             _logger.LogError("Error ensuring subaccount for {Account}: {Error}", accountNumber, ex.Message);
             return null;
+        }
+    }
+
+    public async Task<BaseResponse<PaystackResolveAccountResultDto>> ResolveAccountNumberAsync(
+    string accountNumber, string bankCode, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"bank/resolve?account_number={accountNumber}&bank_code={bankCode}", ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
+            var parsed = JObject.Parse(body);
+
+            if (!(parsed.Value<bool?>("status") ?? false))
+            {
+                var msg = parsed.Value<string>("message") ?? "Could not resolve bank account details.";
+                _logger.LogWarning("Paystack bank/resolve failed. Account={Account}, BankCode={BankCode}, Msg={Msg}, Body={Body}",
+                    accountNumber, bankCode, msg, body);
+                return BaseResponse<PaystackResolveAccountResultDto>.Failure(msg, statusCode: 400);
+            }
+
+            var data = parsed["data"];
+            return BaseResponse<PaystackResolveAccountResultDto>.Success(new PaystackResolveAccountResultDto
+            {
+                AccountNumber = data?.Value<string>("account_number") ?? accountNumber,
+                AccountName = data?.Value<string>("account_name") ?? string.Empty
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error resolving bank account {Account} for bank {Bank}", accountNumber, bankCode);
+            return BaseResponse<PaystackResolveAccountResultDto>.Failure("Failed to resolve bank account with NIBSS.", statusCode: 500);
+        }
+    }
+
+    public async Task<BaseResponse<PaystackSubaccountDetailDto>> GetSubaccountAsync(
+        string subaccountCode, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"subaccount/{subaccountCode}", ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
+            var parsed = JObject.Parse(body);
+
+            if (!(parsed.Value<bool?>("status") ?? false) || parsed["data"] is null)
+            {
+                return BaseResponse<PaystackSubaccountDetailDto>.Failure("Subaccount not found on payment gateway.", statusCode: 404);
+            }
+
+            var data = parsed["data"]!;
+            return BaseResponse<PaystackSubaccountDetailDto>.Success(new PaystackSubaccountDetailDto
+            {
+                SubaccountCode = data.Value<string>("subaccount_code") ?? subaccountCode,
+                BusinessName = data.Value<string>("business_name") ?? string.Empty,
+                SettlementBank = data.Value<string>("settlement_bank") ?? string.Empty,
+                AccountNumber = data.Value<string>("account_number") ?? string.Empty,
+                Active = data.Value<bool?>("active") ?? false,
+                IsVerified = data.Value<bool?>("is_verified") ?? false
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching subaccount {Code}", subaccountCode);
+            return BaseResponse<PaystackSubaccountDetailDto>.Failure("Error verifying subaccount status.", statusCode: 500);
         }
     }
 
@@ -310,4 +386,4 @@ public class PaystackService : IPaystackService
             return false;
         }
     }
-}
+};

@@ -4,6 +4,7 @@ using LifeLine.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LifeLine.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260711134805_AddCampaignBankCode")]
+    partial class AddCampaignBankCode
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -210,12 +213,6 @@ namespace LifeLine.Persistence.Migrations
                     b.Property<decimal>("GoalAmount")
                         .HasColumnType("decimal(18,2)");
 
-                    b.Property<bool>("IsAccountNameResolved")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsPaymentReady")
-                        .HasColumnType("bit");
-
                     b.Property<bool>("IsVerified")
                         .HasColumnType("bit");
 
@@ -228,18 +225,6 @@ namespace LifeLine.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
-
-                    b.Property<DateTime?>("PaymentActivatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("PaymentSetupErrorMessage")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<bool>("PaystackSubaccountIsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("PaystackSubaccountIsVerified")
-                        .HasColumnType("bit");
 
                     b.Property<DateTime>("PerformedAt")
                         .HasColumnType("datetime2");

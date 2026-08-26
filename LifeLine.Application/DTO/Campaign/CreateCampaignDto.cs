@@ -15,6 +15,7 @@ namespace LifeLine.Application.DTO.Campaign
         public decimal GoalAmount { get; set; }
         public DateTime? SurgeryDate { get; set; }
         public string BankName { get; set; } = string.Empty;
+        public string BankCode { get; set; } = string.Empty;
         public string AccountNumber { get; set; } = string.Empty;
         public string AccountName { get; set; } = string.Empty;
     }

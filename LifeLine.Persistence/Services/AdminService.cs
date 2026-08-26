@@ -1,4 +1,4 @@
-﻿using LifeLine.Application.Common.Response;
+using LifeLine.Application.Common.Response;
 using LifeLine.Application.DTO.Admin;
 using LifeLine.Application.Interfaces;
 using LifeLine.Application.Interfaces.IRepository;
@@ -160,9 +160,9 @@ public class AdminService : IAdminService
             if (campaign is null)
                 return BaseResponse<string>.Failure("Campaign not found.", statusCode: 404);
 
-            if (campaign.IsVerified)
+            if (campaign.IsVerified && campaign.IsPaymentReady && !string.IsNullOrEmpty(campaign.SubAccountCode))
                 return BaseResponse<string>.Failure(
-                    "This campaign is already verified.", statusCode: 400);
+                    "This campaign is already verified and payments are active.", statusCode: 400);
 
             if (campaign.Status == CampaignStatus.Rejected)
                 return BaseResponse<string>.Failure(
@@ -175,7 +175,12 @@ public class AdminService : IAdminService
                     activationResult.Message ?? "Could not activate payments for this campaign.",
                     statusCode: activationResult.StatusCode ?? 502);
 
+            // Re-fetch updated campaign entity to prevent overwriting new payment fields with stale state
+            campaign = await _campaignRepo.GetByIdAsync(campaignId, ct) ?? campaign;
+
             campaign.IsVerified = true;
+            campaign.IsPaymentReady = true;
+            campaign.SubAccountCode = activationResult.Data ?? campaign.SubAccountCode;
             campaign.Status = CampaignStatus.Verified;
             campaign.VerifiedAt = DateTime.UtcNow;
             campaign.UpdatedAt = DateTime.UtcNow;

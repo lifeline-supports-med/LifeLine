@@ -34,13 +34,17 @@ using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ─── CORS ─────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
-        policy.AllowAnyOrigin()
+    options.AddPolicy("AllowFrontend", policy =>
+        policy.WithOrigins(
+                "https://localhost:3000",
+                "http://localhost:4000"
+              // e.g. "https://lifeline.pages.dev"
+              )
               .AllowAnyMethod()
-              .AllowAnyHeader());
+              .AllowAnyHeader()
+              .AllowCredentials());
 });
 
 // ─── Swagger ──────────────────────────────────────────
@@ -82,7 +86,12 @@ builder.Services.AddSwaggerGen(c =>
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add(new ProducesAttribute("application/json"));
+})
+.AddJsonOptions(options =>
+{
+    options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
 });
+
 builder.Services.AddSignalR();
 
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
@@ -112,7 +121,6 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 .AddEntityFrameworkStores<ApplicationDbContext>()
 .AddDefaultTokenProviders();
 
-// ─── JWT ──────────────────────────────────────────────
 var jwt = builder.Configuration.GetSection("JwtSettings");
 
 builder.Services.AddAuthentication(options =>
@@ -136,14 +144,12 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// ─── Caching ──────────────────────────────────────────
 builder.Services.AddMemoryCache(options =>
 {
     options.CompactionPercentage = 0.25;
     options.ExpirationScanFrequency = TimeSpan.FromMinutes(1);
 });
 
-// ─── Rate Limiting ────────────────────────────────────
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -201,7 +207,6 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-// ─── Paystack ─────────────────────────────────────────
 builder.Services.Configure<PaystackSettings>(
     builder.Configuration.GetSection("Paystack"));
 builder.Services.AddHttpClient("Paystack", (sp, client) =>
@@ -212,12 +217,10 @@ builder.Services.AddHttpClient("Paystack", (sp, client) =>
         new AuthenticationHeaderValue("Bearer", settings.SecretKey);
 });
 
-// ─── Cloudinary ───────────────────────────────────────
 builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("CloudinarySettings"));
 builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 
-// ─── Email ────────────────────────────────────────────
 builder.Services.Configure<EmailSettings>(
     builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<IEmailService, EmailService>();
@@ -242,7 +245,6 @@ builder.Services.AddTransient<IValidator<CreateCampaignDto>, CreateCampaignDtoVa
 builder.Services.AddTransient<IValidator<UpdateCampaignDto>, UpdateCampaignDtoValidator>();
 builder.Services.AddTransient<IValidator<InitiateDonationDto>, InitiateDonationDtoValidator>();
 
-// ─── Logging ──────────────────────────────────────────
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.AddDebug();
@@ -258,7 +260,6 @@ builder.Host.UseSerilog((context, services, configuration) =>
 
 var app = builder.Build();
 
-// ─── Seed Roles + SuperAdmin ──────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
@@ -299,7 +300,6 @@ using (var scope = app.Services.CreateScope())
             await userManager.AddToRoleAsync(admin1, "SuperAdmin");
     }
 
-    // ── SuperAdmin 2 ───────────────────────────────────
     var admin2Email = configuration["AdminSettings:SuperAdmin2Email"]!;
     if (await userManager.FindByEmailAsync(admin2Email) is null)
     {
@@ -334,7 +334,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("AllowAll");
+app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();

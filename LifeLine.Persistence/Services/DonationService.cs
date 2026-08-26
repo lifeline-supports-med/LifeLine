@@ -1,9 +1,11 @@
-﻿using LifeLine.Application.Common.RequestModel.PaystackDTO;
+using LifeLine.Application.Common.RequestModel.PaystackDTO;
 using LifeLine.Application.Common.Response;
 using LifeLine.Application.DTO.Donation;
+using LifeLine.Application.Interfaces;
 using LifeLine.Application.Interfaces.IRepository;
 using LifeLine.Application.Interfaces.IServices;
 using LifeLine.Domain.Entities;
+using LifeLine.Domain.Enum;
 using LifeLine.Domain.Settings.Paystack;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -14,6 +16,7 @@ public class DonationService : IDonationService
 {
     private readonly IDonationRepository _donationRepo;
     private readonly ICampaignRepository _campaignRepo;
+    private readonly ICampaignService _campaignService;
     private readonly IEmailService _emailService;
     private readonly IPaystackService _paystackService;
     private readonly PaystackSettings _paystack;
@@ -22,6 +25,7 @@ public class DonationService : IDonationService
     public DonationService(
         IDonationRepository donationRepo,
         ICampaignRepository campaignRepo,
+        ICampaignService campaignService,
         IEmailService emailService,
         IPaystackService paystackService,
         IOptions<PaystackSettings> paystack,
@@ -29,6 +33,7 @@ public class DonationService : IDonationService
     {
         _donationRepo = donationRepo;
         _campaignRepo = campaignRepo;
+        _campaignService = campaignService;
         _emailService = emailService;
         _paystackService = paystackService;
         _paystack = paystack.Value;
@@ -50,6 +55,30 @@ public class DonationService : IDonationService
                 return BaseResponse<InitiateDonationResponseDto>.Failure(
                     "This campaign is not yet verified and cannot accept donations.", statusCode: 400);
 
+            if (string.IsNullOrEmpty(campaign.SubAccountCode) || !campaign.IsPaymentReady)
+            {
+                _logger.LogInformation("Campaign {CampaignId} is verified but missing active payment setup. Auto-activating...", dto.CampaignId);
+                var activateRes = await _campaignService.ActivatePaymentsAsync(campaign.Id, ct);
+                if (activateRes.IsSuccess)
+                {
+                    campaign = await _campaignRepo.GetByIdAsync(dto.CampaignId, ct) ?? campaign;
+                }
+                else
+                {
+                    _logger.LogWarning("Auto-activation failed for campaign {CampaignId}: {Error}", dto.CampaignId, activateRes.Message);
+                    return BaseResponse<InitiateDonationResponseDto>.Failure(
+                        $"This campaign's payment account could not be activated: {activateRes.Message}",
+                        statusCode: 400);
+                }
+            }
+
+            if ((campaign.Status != CampaignStatus.Active && campaign.Status != CampaignStatus.Verified) || string.IsNullOrEmpty(campaign.SubAccountCode))
+            {
+                return BaseResponse<InitiateDonationResponseDto>.Failure(
+                    "This campaign is not currently cleared to receive donations. Please try again later.",
+                    statusCode: 400);
+            }
+
             var resolvedEmail = dto.IsAnonymous
                 ? (dto.DonorEmail ?? donorEmail ?? "donor@lifeline.ng")
                 : (donorEmail ?? dto.DonorEmail ?? "donor@lifeline.ng");
@@ -59,9 +88,12 @@ public class DonationService : IDonationService
             var platformFee = _paystack.PlatformFeeAmount;
             var campaignAmount = totalAmount - platformFee;
 
-            if (campaignAmount <= 0)
+            // NOTE: Paystack requires a split recipient's flat share to be at
+            // least ₦100 — so the true minimum donation is the platform
+            // fee plus that ₦100 floor for the campaign's share.
+            if (campaignAmount < platformFee)
                 return BaseResponse<InitiateDonationResponseDto>.Failure(
-                    $"Donation amount must be greater than ₦{platformFee} (platform fee).", statusCode: 400);
+                    $"Donation amount must be at least ₦{platformFee * 2} (minimum ₦{platformFee} platform fee plus minimum ₦{platformFee} to the campaign).", statusCode: 400);
 
             var totalAmountKobo = (long)(totalAmount * 100);
             var platformFeeKobo = (long)(platformFee * 100);
@@ -69,23 +101,11 @@ public class DonationService : IDonationService
 
             var reference = $"LL-{Guid.NewGuid().ToString()[..8].ToUpper()}-{DateTime.UtcNow:yyyyMMddHHmmss}";
 
-            var platformSubaccount = await _paystackService.EnsureSubaccountAsync(
-                _paystack.PlatformFeeAccountName,
-                _paystack.PlatformFeeAccountNumber,
-                _paystack.PlatformFeeBankCode,
-                $"SUB-PLATFORM-{_paystack.PlatformFeeAccountNumber}",
-                ct);
-
-            if (platformSubaccount is null)
-            {
-                _logger.LogError("Failed to create/get platform subaccount for campaign {CampaignId}.", dto.CampaignId);
-                return BaseResponse<InitiateDonationResponseDto>.Failure(
-                    "Payment setup failed. Please try again.", statusCode: 500);
-            }
-
             // Campaign subaccount is created once, at verification time,
-            // by CampaignService.ActivatePaymentsAsync. Just read it here —
-            // no Paystack call needed on every donation.
+            // by CampaignService.ActivatePaymentsAsync. Just read it here.
+            // No platform subaccount is created — the platform fee is
+            // simply whatever's left in the main account after the
+            // campaign's flat share (Paystack settles excess automatically).
             if (string.IsNullOrEmpty(campaign.SubAccountCode))
             {
                 _logger.LogError(
@@ -94,10 +114,7 @@ public class DonationService : IDonationService
             }
             string? campaignSubaccount = campaign.SubAccountCode;
 
-            var splits = new List<PaystackSplitEntryDto>
-            {
-                new() { SubaccountCode = platformSubaccount, ShareKobo = platformFeeKobo }
-            };
+            var splits = new List<PaystackSplitEntryDto>();
             if (campaignSubaccount is not null)
                 splits.Add(new() { SubaccountCode = campaignSubaccount, ShareKobo = campaignAmountKobo });
 
@@ -238,7 +255,7 @@ public class DonationService : IDonationService
     }
 
     public async Task<BaseResponse<List<DonationResponseDto>>> GetCampaignDonationsAsync(
-    Guid campaignId, CancellationToken ct = default)
+        Guid campaignId, CancellationToken ct = default)
     {
         try
         {
