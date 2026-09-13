@@ -1,4 +1,4 @@
-﻿using System.Net.Http.Headers;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using LifeLine.Application.Common.RequestModel.PaystackDTO;
@@ -262,7 +262,7 @@ public class PaystackService : IPaystackService
                 business_name = businessName,
                 settlement_bank = bankCode,
                 account_number = accountNumber,
-                percentage_charge = 10
+                percentage_charge = 0
             };
 
             var createJson = JsonConvert.SerializeObject(createPayload);

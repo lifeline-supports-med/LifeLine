@@ -76,14 +76,8 @@ namespace LifeLine.Domain.Entities
         /// </summary>
         public string? PaymentSetupErrorMessage { get; set; }
 
-        /// <summary>
-        /// Timestamp when the subaccount was successfully cleared for live settlement.
-        /// </summary>
         public DateTime? PaymentActivatedAt { get; set; }
 
-        // ==========================================
-        // CREATOR & RELATIONSHIPS
-        // ==========================================
         public string CreatorId { get; set; } = string.Empty;
         public ApplicationUser Creator { get; set; } = null!;
 

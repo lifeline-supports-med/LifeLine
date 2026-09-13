@@ -19,8 +19,8 @@ namespace LifeLine.Persistence.Services
         private static readonly string[] AllowedDocumentTypes =
             ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
 
-        private const long MaxImageSize = 5 * 1024 * 1024; // 5MB
-        private const long MaxDocumentSize = 10 * 1024 * 1024; // 10MB
+        private const long MaxImageSize = 5 * 1024 * 1024;
+        private const long MaxDocumentSize = 10 * 1024 * 1024;
 
         public CloudinaryService(
             IOptions<CloudinarySettings> settings,
@@ -34,128 +34,184 @@ namespace LifeLine.Persistence.Services
         }
 
         public async Task<CloudinaryUploadResult> UploadImageAsync(
-            IFormFile file, string folder)
+    IFormFile file, string folder)
         {
-            // Validate
             if (file is null || file.Length == 0)
                 return Fail("No file provided.");
-
             if (!AllowedImageTypes.Contains(file.ContentType.ToLower()))
                 return Fail("Only JPEG, PNG, and WebP images are allowed.");
-
             if (file.Length > MaxImageSize)
                 return Fail("Image must be smaller than 5MB.");
 
-            try
+            const int maxAttempts = 3;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                await using var stream = file.OpenReadStream();
-
-                var uploadParams = new ImageUploadParams
+                try
                 {
-                    File = new FileDescription(file.FileName, stream),
-                    Folder = $"lifeline/{folder}",
-                    Transformation = new Transformation()
-                        .Width(800).Height(600)
-                        .Crop("limit")
-                        .Quality("auto")
-                        .FetchFormat("auto"),
-                    UseFilename = false,
-                    UniqueFilename = true,
-                    Overwrite = false
-                };
+                    await using var stream = file.OpenReadStream();
 
-                var result = await _cloudinary.UploadAsync(uploadParams);
+                    var uploadParams = new ImageUploadParams
+                    {
+                        File = new FileDescription(file.FileName, stream),
+                        Folder = $"lifeline/{folder}",
+                        PublicId = $"{folder}-{Guid.NewGuid()}", 
+                        Transformation = new Transformation()
+        .Width(800).Height(600).Crop("limit").Quality("auto").FetchFormat("auto"),
+                        UseFilename = false,
+                        UniqueFilename = false,
+                        Overwrite = true
+                    };
 
-                if (result.Error is not null)
+                    var result = await _cloudinary.UploadAsync(uploadParams);
+                    if (result.Error is not null)
+                    {
+                        _logger.LogError(
+                            "Cloudinary image upload error (attempt {Attempt}/{Max}): {Error}",
+                            attempt, maxAttempts, result.Error.Message);
+
+                        if (attempt == maxAttempts)
+                            return Fail(result.Error.Message);
+
+                        await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
+                        continue;
+                    }
+                    _logger.LogInformation(
+                        "Image uploaded to Cloudinary: {Url}", result.SecureUrl);
+                    return new CloudinaryUploadResult
+                    {
+                        IsSuccess = true,
+                        Url = result.SecureUrl.ToString(),
+                        PublicId = result.PublicId
+                    };
+                }
+                catch (System.Net.Sockets.SocketException ex)
+                {
+                    _logger.LogWarning(
+                        "Cloudinary image upload socket error (attempt {Attempt}/{Max}): {Error}",
+                        attempt, maxAttempts, ex.Message);
+
+                    if (attempt == maxAttempts)
+                        return Fail("Image upload failed after multiple attempts. Please check your connection and try again.");
+
+                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt)); // 2s, 4s, then fail
+                }
+                catch (Exception ex)
                 {
                     _logger.LogError(
-                        "Cloudinary image upload error: {Error}", result.Error.Message);
-                    return Fail(result.Error.Message);
+                        "Cloudinary image upload failed (attempt {Attempt}/{Max}): {Error}",
+                        attempt, maxAttempts, ex.Message);
+
+                    if (attempt == maxAttempts)
+                        return Fail("Image upload failed. Please try again.");
+
+                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
                 }
-
-                _logger.LogInformation(
-                    "Image uploaded to Cloudinary: {Url}", result.SecureUrl);
-
-                return new CloudinaryUploadResult
-                {
-                    IsSuccess = true,
-                    Url = result.SecureUrl.ToString(),
-                    PublicId = result.PublicId
-                };
             }
-            catch (Exception ex)
-            {
-                _logger.LogError("Cloudinary upload failed: {Error}", ex.Message);
-                return Fail("Image upload failed. Please try again.");
-            }
+
+            return Fail("Image upload failed after multiple attempts.");
         }
+
 
         public async Task<CloudinaryUploadResult> UploadDocumentAsync(
             IFormFile file, string folder)
         {
             if (file is null || file.Length == 0)
                 return Fail("No file provided.");
-
             if (!AllowedDocumentTypes.Contains(file.ContentType.ToLower()))
                 return Fail("Only PDF and image files are allowed for documents.");
-
             if (file.Length > MaxDocumentSize)
                 return Fail("Document must be smaller than 10MB.");
 
-            try
+            const int maxAttempts = 3;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                await using var stream = file.OpenReadStream();
-
-                if (file.ContentType.ToLower() == "application/pdf")
+                try
                 {
-                    var rawParams = new RawUploadParams
+                    await using var stream = file.OpenReadStream();
+                    if (file.ContentType.ToLower() == "application/pdf")
                     {
-                        File = new FileDescription(file.FileName, stream),
-                        Folder = $"lifeline/{folder}",
-                        UseFilename = false,
-                        UniqueFilename = true
-                    };
+                        var rawParams = new RawUploadParams
+                        {
+                            File = new FileDescription(file.FileName, stream),
+                            Folder = $"lifeline/{folder}",
+                            UseFilename = false,
+                            UniqueFilename = true
+                        };
+                        var rawResult = await _cloudinary.UploadAsync(rawParams);
+                        if (rawResult.Error is not null)
+                        {
+                            _logger.LogError(
+                                "Cloudinary document upload error (attempt {Attempt}/{Max}): {Error}",
+                                attempt, maxAttempts, rawResult.Error.Message);
 
-                    var rawResult = await _cloudinary.UploadAsync(rawParams);
+                            if (attempt == maxAttempts)
+                                return Fail(rawResult.Error.Message);
 
-                    if (rawResult.Error is not null)
-                        return Fail(rawResult.Error.Message);
-
-                    return new CloudinaryUploadResult
+                            await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
+                            continue;
+                        }
+                        return new CloudinaryUploadResult
+                        {
+                            IsSuccess = true,
+                            Url = rawResult.SecureUrl.ToString(),
+                            PublicId = rawResult.PublicId
+                        };
+                    }
+                    else
                     {
-                        IsSuccess = true,
-                        Url = rawResult.SecureUrl.ToString(),
-                        PublicId = rawResult.PublicId
-                    };
+                        var imgParams = new ImageUploadParams
+                        {
+                            File = new FileDescription(file.FileName, stream),
+                            Folder = $"lifeline/{folder}",
+                            UseFilename = false,
+                            UniqueFilename = true
+                        };
+                        var imgResult = await _cloudinary.UploadAsync(imgParams);
+                        if (imgResult.Error is not null)
+                        {
+                            _logger.LogError(
+                                "Cloudinary document image upload error (attempt {Attempt}/{Max}): {Error}",
+                                attempt, maxAttempts, imgResult.Error.Message);
+
+                            if (attempt == maxAttempts)
+                                return Fail(imgResult.Error.Message);
+
+                            await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
+                            continue;
+                        }
+                        return new CloudinaryUploadResult
+                        {
+                            IsSuccess = true,
+                            Url = imgResult.SecureUrl.ToString(),
+                            PublicId = imgResult.PublicId
+                        };
+                    }
                 }
-                else
+                catch (System.Net.Sockets.SocketException ex)
                 {
-                    var imgParams = new ImageUploadParams
-                    {
-                        File = new FileDescription(file.FileName, stream),
-                        Folder = $"lifeline/{folder}",
-                        UseFilename = false,
-                        UniqueFilename = true
-                    };
+                    _logger.LogWarning(
+                        "Cloudinary document upload socket error (attempt {Attempt}/{Max}): {Error}",
+                        attempt, maxAttempts, ex.Message);
 
-                    var imgResult = await _cloudinary.UploadAsync(imgParams);
+                    if (attempt == maxAttempts)
+                        return Fail("Document upload failed after multiple attempts. Please check your connection and try again.");
 
-                    if (imgResult.Error is not null)
-                        return Fail(imgResult.Error.Message);
+                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        "Cloudinary document upload failed (attempt {Attempt}/{Max}): {Error}",
+                        attempt, maxAttempts, ex.Message);
 
-                    return new CloudinaryUploadResult
-                    {
-                        IsSuccess = true,
-                        Url = imgResult.SecureUrl.ToString(),
-                        PublicId = imgResult.PublicId
-                    };
+                    if (attempt == maxAttempts)
+                        return Fail("Document upload failed. Please try again.");
+
+                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError("Cloudinary document upload failed: {Error}", ex.Message);
-                return Fail("Document upload failed. Please try again.");
-            }
+
+            return Fail("Document upload failed after multiple attempts.");
         }
 
         public async Task<bool> DeleteFileAsync(string publicId)

@@ -1,4 +1,4 @@
-﻿using LifeLine.Domain.Entities;
+using LifeLine.Domain.Entities;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace LifeLine.Persistence.Context;
 
 public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
-    : IdentityDbContext<ApplicationUser>(options)
+    : IdentityDbContext<ApplicationUser, IdentityRole, string>(options)
 {
     public DbSet<Campaign> Campaigns { get; set; }
     public DbSet<MedicalDocument> MedicalDocument { get; set; }
