@@ -40,8 +40,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowFrontend", policy =>
         policy.WithOrigins(
                 "https://localhost:3000",
-                "http://localhost:4000"
-              // e.g. "https://lifeline.pages.dev"
+                "https://lifelineux.med-lifeline-supports.workers.dev/"
               )
               .AllowAnyMethod()
               .AllowAnyHeader()
