@@ -24,7 +24,7 @@ namespace LifeLine.Persistence.Services
         {
             _settings = settings.Value;
             _logger = logger;
-            _frontendBaseUrl = config["AppSettings:FrontendBaseUrl"] ?? "http://localhost:3000; http://localhost:4000";
+            _frontendBaseUrl = config["AppSettings:FrontendBaseUrl"] ?? "https://lifelineux.med-lifeline-supports.workers.dev";
         }
 
         public async Task SendPasswordResetEmailAsync(
@@ -220,15 +220,69 @@ namespace LifeLine.Persistence.Services
             await SendEmailAsync(toEmail, toName, subject, body);
         }
 
+        //private async Task SendEmailAsync(
+        //    string toEmail, string toName,
+        //    string subject, string htmlBody)
+        //{
+        //    try
+        //    {
+        //        var message = new MimeMessage();
+        //        message.From.Add(new MailboxAddress(_settings.SenderName, _settings.SenderEmail));
+        //        message.To.Add(new MailboxAddress(toName, toEmail));
+        //        message.Subject = subject;
+
+        //        message.Body = new BodyBuilder
+        //        {
+        //            HtmlBody = htmlBody
+        //        }.ToMessageBody();
+
+        //        using var client = new SmtpClient();
+
+        //        await client.ConnectAsync(
+        //            _settings.Host,
+        //            _settings.Port,
+        //            SecureSocketOptions.StartTls);
+
+        //        await client.AuthenticateAsync(
+        //            _settings.SenderEmail,
+        //            _settings.Password);
+
+        //        await client.SendAsync(message);
+        //        await client.DisconnectAsync(true);
+
+        //        _logger.LogInformation(
+        //            "Email sent to {Email} — Subject: {Subject}", toEmail, subject);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(
+        //            "Failed to send email to {Email}: {Error}", toEmail, ex.Message);
+
+
+        //    }
+        //}
+
         private async Task SendEmailAsync(
-            string toEmail, string toName,
-            string subject, string htmlBody)
+    string toEmail,
+    string toName,
+    string subject,
+    string htmlBody,
+    CancellationToken cancellationToken = default)
         {
             try
             {
                 var message = new MimeMessage();
-                message.From.Add(new MailboxAddress(_settings.SenderName, _settings.SenderEmail));
-                message.To.Add(new MailboxAddress(toName, toEmail));
+
+                message.From.Add(
+                    new MailboxAddress(
+                        _settings.SenderName,
+                        _settings.SenderEmail));
+
+                message.To.Add(
+                    new MailboxAddress(
+                        toName,
+                        toEmail));
+
                 message.Subject = subject;
 
                 message.Body = new BodyBuilder
@@ -238,27 +292,49 @@ namespace LifeLine.Persistence.Services
 
                 using var client = new SmtpClient();
 
+                // Prevent SMTP operations from hanging indefinitely.
+                client.Timeout = 15000;
+
                 await client.ConnectAsync(
                     _settings.Host,
                     _settings.Port,
-                    SecureSocketOptions.StartTls);
+                    SecureSocketOptions.StartTls,
+                    cancellationToken);
 
                 await client.AuthenticateAsync(
                     _settings.SenderEmail,
-                    _settings.Password);
+                    _settings.Password,
+                    cancellationToken);
 
-                await client.SendAsync(message);
-                await client.DisconnectAsync(true);
+                await client.SendAsync(
+                    message,
+                    cancellationToken);
+
+                await client.DisconnectAsync(
+                    true,
+                    cancellationToken);
 
                 _logger.LogInformation(
-                    "Email sent to {Email} — Subject: {Subject}", toEmail, subject);
+                    "Email sent successfully to {Email}. Subject: {Subject}",
+                    toEmail,
+                    subject);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    "Email sending was cancelled for {Email}. Subject: {Subject}",
+                    toEmail,
+                    subject);
+
+                throw;
             }
             catch (Exception ex)
             {
                 _logger.LogError(
-                    "Failed to send email to {Email}: {Error}", toEmail, ex.Message);
-
-               
+                    ex,
+                    "Failed to send email to {Email}. Subject: {Subject}",
+                    toEmail,
+                    subject);
             }
         }
 

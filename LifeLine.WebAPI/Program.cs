@@ -221,9 +221,17 @@ builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("CloudinarySettings"));
 builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 
+//builder.Services.Configure<EmailSettings>(
+//    builder.Configuration.GetSection("EmailSettings"));
+//builder.Services.AddScoped<IEmailService, EmailService>();
+
 builder.Services.Configure<EmailSettings>(
     builder.Configuration.GetSection("EmailSettings"));
+
 builder.Services.AddScoped<IEmailService, EmailService>();
+
+builder.Services.AddSingleton<IEmailBackgroundQueue, EmailBackgroundQueue>();
+builder.Services.AddHostedService<EmailBackgroundService>();
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<JwtTokenHelper>();

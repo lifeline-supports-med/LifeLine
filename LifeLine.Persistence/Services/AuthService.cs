@@ -14,6 +14,7 @@ public class AuthService : IAuthService
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly JwtTokenHelper _jwtHelper;
+    private readonly IEmailBackgroundQueue _emailBackgroundQueue;
     private readonly IConfiguration _config;
     private readonly IEmailService _emailService;
     private readonly ILogger<AuthService> _logger;
@@ -23,19 +24,23 @@ public class AuthService : IAuthService
         JwtTokenHelper jwtHelper,
         IConfiguration config,
         IEmailService emailService,
+        IEmailBackgroundQueue emailBackgroundQueue,
         ILogger<AuthService> logger)
     {
         _userManager = userManager;
         _jwtHelper = jwtHelper;
+        _emailBackgroundQueue = emailBackgroundQueue;
         _config = config;
         _emailService = emailService;
         _logger = logger;
     }
 
+
     //public async Task<BaseResponse<AuthResponseDto>> RegisterAsync(RegisterDto dto)
     //{
     //    if (string.IsNullOrWhiteSpace(dto.Email))
-    //        return BaseResponse<AuthResponseDto>.Failure("Email is required.", statusCode: 400);
+    //        return BaseResponse<AuthResponseDto>.Failure(
+    //            "Email is required.", statusCode: 400);
 
     //    var existingUser = await _userManager.FindByEmailAsync(dto.Email);
     //    if (existingUser is not null)
@@ -53,7 +58,7 @@ public class AuthService : IAuthService
     //        UserName = email,
     //        NormalizedUserName = email.ToUpper(),
     //        PhoneNumber = dto.PhoneNumber?.Trim(),
-    //        Role = dto.Role,
+    //        Role = "CampaignCreator",
     //        IsActive = true,
     //        EmailConfirmed = false
     //    };
@@ -69,13 +74,24 @@ public class AuthService : IAuthService
     //        return BaseResponse<AuthResponseDto>.ValidationFailure(errors);
     //    }
 
-    //    await _userManager.AddToRoleAsync(user, dto.Role);
+    //    await _userManager.AddToRoleAsync(user, "CampaignCreator");
 
-    //    await _emailService.SendWelcomeEmailAsync(
-    //        user.Email!, $"{user.FirstName} {user.LastName}".Trim());
+    //    try
+    //    {
+    //        await _emailService.SendWelcomeEmailAsync(
+    //            user.Email!,
+    //            $"{user.FirstName} {user.LastName}".Trim());
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        _logger.LogWarning(
+    //            ex,
+    //            "User {Email} was created successfully, but the welcome email could not be sent.",
+    //            user.Email);
+    //    }
 
     //    _logger.LogInformation(
-    //        "New user registered: {Email} as {Role}", user.Email, user.Role);
+    //        "New user registered: {Email} as CampaignCreator", user.Email);
 
     //    var response = await BuildAuthResponseAsync(user);
     //    return BaseResponse<AuthResponseDto>.Success(
@@ -89,9 +105,11 @@ public class AuthService : IAuthService
                 "Email is required.", statusCode: 400);
 
         var existingUser = await _userManager.FindByEmailAsync(dto.Email);
+
         if (existingUser is not null)
             return BaseResponse<AuthResponseDto>.Failure(
-                "An account with this email already exists.", statusCode: 409);
+                "An account with this email already exists.",
+                statusCode: 409);
 
         var email = dto.Email.ToLower().Trim();
 
@@ -111,26 +129,39 @@ public class AuthService : IAuthService
 
         _logger.LogInformation(
             "Attempting to register: Email={Email}, UserName={UserName}",
-            user.Email, user.UserName);
+            user.Email,
+            user.UserName);
 
         var result = await _userManager.CreateAsync(user, dto.Password);
+
         if (!result.Succeeded)
         {
-            var errors = result.Errors.Select(e => e.Description).ToList();
-            return BaseResponse<AuthResponseDto>.ValidationFailure(errors);
+            var errors = result.Errors
+                .Select(e => e.Description)
+                .ToList();
+
+            return BaseResponse<AuthResponseDto>
+                .ValidationFailure(errors);
         }
 
-        await _userManager.AddToRoleAsync(user, "CampaignCreator");
+        await _userManager.AddToRoleAsync(
+            user,
+            "CampaignCreator");
 
-        await _emailService.SendWelcomeEmailAsync(
-            user.Email!, $"{user.FirstName} {user.LastName}".Trim());
+        await _emailBackgroundQueue.QueueWelcomeEmailAsync(
+            user.Email!,
+            $"{user.FirstName} {user.LastName}".Trim());
 
         _logger.LogInformation(
-            "New user registered: {Email} as CampaignCreator", user.Email);
+            "New user registered: {Email} as CampaignCreator",
+            user.Email);
 
         var response = await BuildAuthResponseAsync(user);
+
         return BaseResponse<AuthResponseDto>.Success(
-            response, "Welcome to Lifeline! Your account has been created.", 201);
+            response,
+            "Welcome to Lifeline! Your account has been created.",
+            201);
     }
 
     public async Task<BaseResponse<AuthResponseDto>> LoginAsync(LoginDto dto)
